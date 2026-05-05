@@ -450,56 +450,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      // Find matching liquor record
-      const matchedProduct = await storage.findLiquorByBarcode(barcode);
-      
-      // Debug: Show some UPC codes for comparison
-      if (!matchedProduct && allRecords.length > 0) {
-        console.log('Sample UPC codes from first 3 records:');
-        allRecords.slice(0, 3).forEach((record, i) => {
-          console.log(`Record ${i + 1}: UPC1="${record.upcCode1}", UPC2="${record.upcCode2}"`);
-        });
-        
-        // Try to find any record with this UPC
-        const foundRecord = allRecords.find(r => 
-          r.upcCode1 === barcode || r.upcCode2 === barcode ||
-          r.upcCode1?.trim() === barcode || r.upcCode2?.trim() === barcode
-        );
-        console.log('Direct search result:', foundRecord ? 'FOUND' : 'NOT FOUND');
-      }
-      
-      if (matchedProduct) {
-        // Add to scanned items if sessionId provided
-        if (sessionId) {
-          await storage.addScannedItem({
-            sessionId,
-            liquorRecordId: matchedProduct.id,
-            scannedBarcode: barcode, // Store the actual scanned barcode, not the MLCC version
-            scannedAt: new Date().toISOString(),
-            quantity: 1,
-          });
-        }
+      // Find ALL matching liquor records for this barcode
+      const matchedProducts = await storage.findAllLiquorByBarcode(barcode);
 
-        console.log('Product found:', matchedProduct.brandName);
-        
-        res.json({
-          success: true,
-          barcode: barcode, // Return the actual scanned barcode
-          matchedProduct: {
-            ...matchedProduct,
-            // Keep the product details but note that we matched using the scanned barcode
-            scannedUpc: barcode, // Add the actual scanned UPC for reference
-          },
-        });
-      } else {
+      if (matchedProducts.length === 0) {
         console.log('No product found for barcode:', barcode);
-        
-        res.json({
+        return res.json({
           success: false,
           barcode,
           error: "Product not found in database",
         });
       }
+
+      // Multiple matches — return them all so the client can show a picker
+      if (matchedProducts.length > 1) {
+        console.log(`${matchedProducts.length} products share barcode ${barcode} — returning for user selection`);
+        return res.json({
+          success: true,
+          requiresSelection: true,
+          barcode,
+          matchedProducts,
+        });
+      }
+
+      // Exactly one match — add immediately as before
+      const matchedProduct = matchedProducts[0];
+      if (sessionId) {
+        await storage.addScannedItem({
+          sessionId,
+          liquorRecordId: matchedProduct.id,
+          scannedBarcode: barcode,
+          scannedAt: new Date().toISOString(),
+          quantity: 1,
+        });
+      }
+
+      console.log('Product found:', matchedProduct.brandName);
+      res.json({
+        success: true,
+        requiresSelection: false,
+        barcode,
+        matchedProduct,
+      });
     } catch (error) {
       console.error("Barcode scan error:", error);
       

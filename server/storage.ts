@@ -11,6 +11,7 @@ export interface IStorage {
   getLiquorRecords(): Promise<LiquorRecord[]>;
   clearLiquorRecords(): Promise<void>;
   findLiquorByBarcode(barcode: string): Promise<LiquorRecord | undefined>;
+  findAllLiquorByBarcode(barcode: string): Promise<LiquorRecord[]>;
   
   // Scanned items methods
   addScannedItem(item: InsertScannedItem): Promise<ScannedItem>;
@@ -100,24 +101,23 @@ export class MemStorage implements IStorage {
   }
 
   async findLiquorByBarcode(barcode: string): Promise<LiquorRecord | undefined> {
-    // Helper function to normalize UPC codes by removing leading zeros
+    const results = await this.findAllLiquorByBarcode(barcode);
+    return results[0];
+  }
+
+  async findAllLiquorByBarcode(barcode: string): Promise<LiquorRecord[]> {
     const normalizeUpc = (upc: string | null): string => {
       if (!upc) return '';
-      return upc.replace(/^0+/, '') || '0'; // Remove leading zeros, but keep at least one digit
+      return upc.replace(/^0+/, '') || '0';
     };
 
     const normalizedBarcode = normalizeUpc(barcode);
-    
-    return Array.from(this.liquorRecords.values()).find((record) => {
+
+    return Array.from(this.liquorRecords.values()).filter((record) => {
       const normalizedUpc1 = normalizeUpc(record.upcCode1);
       const normalizedUpc2 = normalizeUpc(record.upcCode2);
-      
-      // Try exact match first
-      if (record.upcCode1 === barcode || record.upcCode2 === barcode) {
-        return true;
-      }
-      
-      // Then try normalized match (without leading zeros)
+
+      if (record.upcCode1 === barcode || record.upcCode2 === barcode) return true;
       return normalizedUpc1 === normalizedBarcode || normalizedUpc2 === normalizedBarcode;
     });
   }

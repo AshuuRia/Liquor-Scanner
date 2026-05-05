@@ -8,7 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { FileText, Scan, AlertCircle, Plus } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { FileText, Scan, AlertCircle, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { LiquorRecord, Session } from "@shared/schema";
 
@@ -22,6 +23,12 @@ export default function BarcodeScannerPage() {
     matchedProducts: 0,
     lastScanTime: null as string | null,
   });
+  // Disambiguation dialog state
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerBarcode, setPickerBarcode] = useState<string>("");
+  const [pickerChoices, setPickerChoices] = useState<LiquorRecord[]>([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
+
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -128,23 +135,68 @@ export default function BarcodeScannerPage() {
     }
   };
 
+  // Called after user picks one product from the disambiguation dialog
+  const confirmPickerSelection = async (product: LiquorRecord) => {
+    setPickerLoading(true);
+    try {
+      const response = await fetch('/api/add-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          liquorRecordId: product.id,
+          sessionId: sessionId || 'default',
+          scannedBarcode: pickerBarcode,
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setScanStats(prev => ({
+          totalScans: prev.totalScans + 1,
+          matchedProducts: prev.matchedProducts + 1,
+          lastScanTime: new Date().toLocaleTimeString(),
+        }));
+        toast({
+          title: "Product added!",
+          description: `${product.brandName} - ${product.bottleSize} ($${product.shelfPrice})`,
+        });
+        setRefreshTrigger(prev => prev + 1);
+      } else {
+        throw new Error(result.error || 'Failed to add item');
+      }
+    } catch (error) {
+      toast({ variant: "destructive", title: "Error", description: "Failed to add product." });
+    } finally {
+      setPickerLoading(false);
+      setPickerOpen(false);
+      setPickerChoices([]);
+    }
+  };
+
   const handleScan = async (barcode: string) => {
     console.log('Processing scanned barcode:', barcode);
     
     try {
       const response = await fetch('/api/scan-barcode', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          barcode,
-          sessionId,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barcode, sessionId }),
       });
 
       const result = await response.json();
-      
+
+      // Multiple products share this barcode — show picker before adding anything
+      if (result.success && result.requiresSelection) {
+        setPickerBarcode(barcode);
+        setPickerChoices(result.matchedProducts);
+        setPickerOpen(true);
+        setScanStats(prev => ({
+          ...prev,
+          totalScans: prev.totalScans + 1,
+          lastScanTime: new Date().toLocaleTimeString(),
+        }));
+        return;
+      }
+
       setScanStats(prev => ({
         totalScans: prev.totalScans + 1,
         matchedProducts: prev.matchedProducts + (result.success ? 1 : 0),
@@ -156,29 +208,25 @@ export default function BarcodeScannerPage() {
           title: "Product found!",
           description: `${result.matchedProduct.brandName} - ${result.matchedProduct.bottleSize}`,
         });
-        
-        // Refresh the scanned items list
         setRefreshTrigger(prev => prev + 1);
       } else {
-        // Play error sound for failed scan
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-        
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        
-        // Create error sound: two quick beeps
-        oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
-        oscillator.frequency.setValueAtTime(600, audioContext.currentTime + 0.1);
-        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-        
-        oscillator.start(audioContext.currentTime);
-        oscillator.stop(audioContext.currentTime + 0.2);
-        
+        // Play error beep for unrecognised barcode
+        try {
+          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const oscillator = audioContext.createOscillator();
+          const gainNode = audioContext.createGain();
+          oscillator.connect(gainNode);
+          gainNode.connect(audioContext.destination);
+          oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+          oscillator.frequency.setValueAtTime(600, audioContext.currentTime + 0.1);
+          gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+          oscillator.start(audioContext.currentTime);
+          oscillator.stop(audioContext.currentTime + 0.2);
+        } catch { /* audio not critical */ }
+
         toast({
-          variant: "destructive", 
+          variant: "destructive",
           title: "Product not found",
           description: `No match found for barcode: ${barcode}`,
         });
@@ -199,6 +247,47 @@ export default function BarcodeScannerPage() {
 
   return (
     <div className="min-h-screen bg-background">
+
+      {/* ── Duplicate barcode picker dialog ── */}
+      <Dialog open={pickerOpen} onOpenChange={(open) => { if (!open && !pickerLoading) setPickerOpen(false); }}>
+        <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Multiple products found
+            </DialogTitle>
+            <DialogDescription>
+              This barcode matches {pickerChoices.length} products in the database. Tap the one you're holding to add the correct item.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 mt-2">
+            {pickerChoices.map((product) => (
+              <button
+                key={product.id}
+                disabled={pickerLoading}
+                onClick={() => confirmPickerSelection(product)}
+                className="w-full text-left p-3 rounded-lg border border-border hover:bg-accent hover:border-primary transition-colors disabled:opacity-50"
+              >
+                <div className="font-medium text-sm text-foreground">{product.brandName}</div>
+                <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                  <span>{product.bottleSize}</span>
+                  {product.proof && <span>{product.proof} proof</span>}
+                  <span className="ml-auto font-semibold text-foreground">
+                    ${typeof product.shelfPrice === 'number' ? product.shelfPrice.toFixed(2) : product.shelfPrice}
+                  </span>
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  Code: {product.liquorCode} · {product.vendorName}
+                </div>
+              </button>
+            ))}
+          </div>
+          <Button variant="outline" className="w-full mt-2" disabled={pickerLoading} onClick={() => setPickerOpen(false)}>
+            Cancel
+          </Button>
+        </DialogContent>
+      </Dialog>
+
       {/* Header */}
       <header className="bg-card border-b border-border shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
