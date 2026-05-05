@@ -232,64 +232,34 @@ function generateLabelHTML(items: any[]) {
   `;
 }
 
-// Field specifications matching the Python script
-const FIELD_SPECS = [
-  ["LIQUOR CODE", 0, 5],
-  ["BRAND NAME", 5, 37],
-  ["ADA NUMBER", 37, 40],
-  ["ADA NAME", 40, 65],
-  ["VENDOR NAME", 65, 90],
-  ["PROOF", 110, 115],
-  ["BOTTLE SIZE", 115, 122],
-  ["PACK SIZE", 122, 125],
-  ["ON PREMISE PRICE", 125, 136],
-  ["OFF PREMISE PRICE", 136, 147],
-  ["SHELF PRICE", 147, 158],
-  ["UPC CODE 1", 158, 172],
-  ["UPC CODE 2", 172, 186],
-  ["EFFECTIVE DATE", 186, 194],
-] as const;
+// TSV column indices for the Michigan LARA Price Book format
+// Columns: Liquor Code, Brand Name, ADA Number, ADA Name, Vendor Name,
+//          Liquor Type, Proof, Bottle Size, Case Size, Packs per Case,
+//          Product Category, On Premise Price, Off Premise Price, Shelf price,
+//          GTIN/UPC, Effective Date, Effective Date with Liq Code
+function parsePrice(value: string): number {
+  const num = parseFloat(value.replace(/[$,]/g, '').trim());
+  return isNaN(num) ? 0 : num;
+}
 
-function parseLine(line: string) {
-  const row: any = {};
-  
-  for (const [name, start, end] of FIELD_SPECS) {
-    let value = line.slice(start, end).trim();
-    
-    // Handle price conversion
-    if (name.includes("PRICE")) {
-      try {
-        const numValue = parseFloat(value.replace(/[$,]/g, ''));
-        if (!isNaN(numValue)) {
-          value = numValue as any;
-        }
-      } catch {
-        // Keep original value if conversion fails
-      }
-    }
-    // Handle date formatting MMDDYYYY to YYYY-MM-DD
-    else if (name === "EFFECTIVE DATE" && value.length === 8) {
-      value = `${value.slice(4)}-${value.slice(0, 2)}-${value.slice(2, 4)}`;
-    }
-    
-    row[name.toLowerCase().replace(/ /g, "")] = value;
-  }
-  
+function parseTsvLine(line: string) {
+  const cols = line.split('\t');
+
   return {
-    liquorCode: row.liquorcode || "",
-    brandName: row.brandname || "",
-    adaNumber: row.adanumber || "",
-    adaName: row.adaname || "",
-    vendorName: row.vendorname || "",
-    proof: row.proof || "",
-    bottleSize: row.bottlesize || "",
-    packSize: row.packsize || "",
-    onPremisePrice: row.onpremiseprice || 0,
-    offPremisePrice: row.offpremiseprice || 0,
-    shelfPrice: row.shelfprice || 0,
-    upcCode1: row.upccode1 || "",
-    upcCode2: row.upccode2 || "",
-    effectiveDate: row.effectivedate || "",
+    liquorCode:      (cols[0]  || "").trim(),
+    brandName:       (cols[1]  || "").trim(),
+    adaNumber:       (cols[2]  || "").trim(),
+    adaName:         (cols[3]  || "").trim(),
+    vendorName:      (cols[4]  || "").trim(),
+    proof:           (cols[6]  || "").trim(),
+    bottleSize:      (cols[7]  || "").trim(),
+    packSize:        (cols[8]  || "").trim(),
+    onPremisePrice:  parsePrice(cols[11] || ""),
+    offPremisePrice: parsePrice(cols[12] || ""),
+    shelfPrice:      parsePrice(cols[13] || ""),
+    upcCode1:        (cols[14] || "").trim(),
+    upcCode2:        "",
+    effectiveDate:   (cols[15] || "").trim(),
   };
 }
 
@@ -319,7 +289,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       for (const line of lines) {
         if (line.trim()) {
-          const record = parseLine(line);
+          const record = parseTsvLine(line);
+          if (!record.liquorCode) continue;
           records.push(record);
           
           if (record.brandName) brands.add(record.brandName);
@@ -384,7 +355,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log('Content received for file:', filename, 'Length:', content.length);
 
-      const lines = content.split('\n').filter((line: string) => line.trim());
+      const allLines = content.split('\n').filter((line: string) => line.trim());
+      // Skip header row
+      const lines = allLines[0]?.toLowerCase().includes('liquor code') ? allLines.slice(1) : allLines;
       console.log('File parsed, total lines:', lines.length);
       
       const records = [];
@@ -394,7 +367,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       for (const line of lines) {
         if (line.trim()) {
-          const record = parseLine(line);
+          const record = parseTsvLine(line);
+          if (!record.liquorCode) continue;
           records.push(record);
           
           if (record.brandName) brands.add(record.brandName);
@@ -952,8 +926,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const url = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/May-2-2026-Price-Book-TXT.txt?rev=0c6b278ff50242b7917b090cc9f6bbc2&hash=CDD79D3A69C5876AEA62FF8E0756ADEA';
       console.log('Downloading from:', url);
       
-      // Fetch the data from the website
-      const response = await fetch(url);
+      // Fetch the data from the website with a browser User-Agent to avoid blocks
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        },
+      });
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -962,8 +940,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fileContent = await response.text();
       console.log('Downloaded content, length:', fileContent.length);
       
-      const lines = fileContent.split('\n').filter((line: string) => line.trim());
-      console.log('File parsed, total lines:', lines.length);
+      const allLines = fileContent.split('\n').filter((line: string) => line.trim());
+      // Skip header row (TSV format has a header)
+      const lines = allLines[0]?.toLowerCase().includes('liquor code') ? allLines.slice(1) : allLines;
+      console.log('File parsed, data lines:', lines.length);
       
       const records = [];
       const brands = new Set();
@@ -972,7 +952,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       for (const line of lines) {
         if (line.trim()) {
-          const record = parseLine(line);
+          const record = parseTsvLine(line);
+          if (!record.liquorCode) continue;
           records.push(record);
           
           if (record.brandName) brands.add(record.brandName);
