@@ -172,8 +172,17 @@ export default function BarcodeScannerPage() {
     }
   };
 
-  const handleScan = async (barcode: string) => {
-    console.log('Processing scanned barcode:', barcode);
+  const handleScan = async (rawBarcode: string) => {
+    // Cameras often decode UPC-A (12 digits) as EAN-13 (13 digits, extra leading 0)
+    // or GTIN-14 (14 digits, two leading zeros). Strip back to what's on the bottle.
+    const barcode = (() => {
+      if (/^\d+$/.test(rawBarcode)) {
+        if (rawBarcode.length === 14 && rawBarcode.startsWith('00')) return rawBarcode.slice(2);
+        if (rawBarcode.length === 13 && rawBarcode.startsWith('0'))  return rawBarcode.slice(1);
+      }
+      return rawBarcode;
+    })();
+    console.log('Scanned barcode — raw:', rawBarcode, '→ normalized:', barcode);
     
     try {
       const response = await fetch('/api/scan-barcode', {
