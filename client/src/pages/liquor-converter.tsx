@@ -347,7 +347,7 @@ export default function LiquorConverter() {
                   </div>
                   <div className="flex items-start space-x-2">
                     <FileText className="h-4 w-4 text-primary mt-0.5" />
-                    <span>Source: documents.apps.lara.state.mi.us/mlcc/webprbk.txt</span>
+                    <span>Source: michigan.gov LARA Price Book (May 2, 2026)</span>
                   </div>
                   <div className="flex items-start space-x-2">
                     <FileText className="h-4 w-4 text-primary mt-0.5" />

@@ -949,7 +949,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log('Fetching liquor data from Michigan state website...');
     
     try {
-      const url = 'https://documents.apps.lara.state.mi.us/mlcc/webprbk.txt';
+      const url = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/May-2-2026-Price-Book-TXT.txt?rev=0c6b278ff50242b7917b090cc9f6bbc2&hash=CDD79D3A69C5876AEA62FF8E0756ADEA';
       console.log('Downloading from:', url);
       
       // Fetch the data from the website
