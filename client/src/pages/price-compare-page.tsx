@@ -130,7 +130,7 @@ export default function PriceComparePage() {
       const hydrated: ComparisonRow[] = data.rows.map((r: any) => ({
         ...r,
         resolvedByUser: false,
-        newPrice:       r.michiganPrice ?? r.registerPrice,
+        newPrice:       r.registerPrice,
         useCustomName:  false,
         customName:     r.name,
       }));
