@@ -5,10 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import {
   ArrowLeft, Upload, TrendingUp, TrendingDown, Minus,
-  AlertCircle, CheckCircle, Download, RefreshCw, ChevronUp, ChevronDown
+  AlertCircle, CheckCircle, Download, RefreshCw, ChevronUp, ChevronDown,
+  AlertTriangle, HelpCircle
 } from "lucide-react";
+import type { LiquorRecord } from "@shared/schema";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -20,6 +23,8 @@ interface ComparisonRow {
   liquorCode: string;
   matched: boolean;
   multipleMatches: boolean;
+  allMatches?: LiquorRecord[];
+  resolvedByUser: boolean;
   michiganPrice: number | null;
   michiganName: string | null;
   michiganBottleSize: string | null;
@@ -31,7 +36,7 @@ interface ComparisonRow {
   customName: string;
 }
 
-type Filter = "all" | "increased" | "decreased" | "same" | "notfound";
+type Filter = "all" | "increased" | "decreased" | "same" | "notfound" | "ambiguous";
 type SortKey = "name" | "registerPrice" | "michiganPrice" | "priceDiff" | "newPrice";
 type SortDir = "asc" | "desc";
 
@@ -88,6 +93,9 @@ export default function PriceComparePage() {
   const [sortDir, setSortDir]     = useState<SortDir>("asc");
   const [search, setSearch]       = useState("");
 
+  // Disambiguation dialog state
+  const [disambigRow, setDisambigRow] = useState<{ origIdx: number; row: ComparisonRow } | null>(null);
+
   // ── file handling ──────────────────────────────────────────────────────────
 
   const processFile = useCallback(async (file: File) => {
@@ -110,18 +118,20 @@ export default function PriceComparePage() {
       // Hydrate with client-side editable fields
       const hydrated: ComparisonRow[] = data.rows.map((r: any) => ({
         ...r,
-        newPrice:      r.michiganPrice ?? r.registerPrice,
-        useCustomName: false,
-        customName:    r.name,
+        resolvedByUser: false,
+        newPrice:       r.michiganPrice ?? r.registerPrice,
+        useCustomName:  false,
+        customName:     r.name,
       }));
       setRows(hydrated);
       setFilter("all");
 
-      const changed  = hydrated.filter(r => r.priceDiff !== null && r.priceDiff !== 0).length;
-      const notFound = hydrated.filter(r => !r.matched).length;
+      const changed   = hydrated.filter(r => r.priceDiff !== null && r.priceDiff !== 0).length;
+      const notFound  = hydrated.filter(r => !r.matched).length;
+      const ambiguous = hydrated.filter(r => r.multipleMatches).length;
       toast({
         title: "Comparison ready",
-        description: `${hydrated.length} products · ${changed} price changes · ${notFound} not found in Michigan DB`,
+        description: `${hydrated.length} products · ${changed} price changes · ${notFound} not found in MI DB${ambiguous ? ` · ${ambiguous} need review` : ""}`,
       });
     } catch (err: any) {
       toast({ variant: "destructive", title: "Import failed", description: err.message });
@@ -155,6 +165,27 @@ export default function PriceComparePage() {
     toast({ title: "Prices reset", description: "All new prices set to Michigan price." });
   };
 
+  // Apply a user-chosen Michigan match to a row
+  const applyMatch = (origIdx: number, match: LiquorRecord) => {
+    const row = rows[origIdx];
+    const michiganPrice = match.shelfPrice ?? null;
+    const priceDiff = michiganPrice !== null
+      ? Math.round((michiganPrice - row.registerPrice) * 100) / 100
+      : null;
+    updateRow(origIdx, {
+      matched:          true,
+      resolvedByUser:   true,
+      michiganPrice,
+      michiganName:     `${match.brandName} ${match.bottleSize}`,
+      michiganBottleSize: match.bottleSize ?? null,
+      michiganLiquorCode: match.liquorCode ?? null,
+      priceDiff,
+      newPrice:         michiganPrice ?? row.registerPrice,
+    });
+    setDisambigRow(null);
+    toast({ title: "Match applied", description: `Linked to ${match.brandName} ${match.bottleSize}` });
+  };
+
   // ── sorting ────────────────────────────────────────────────────────────────
 
   const toggleSort = (key: SortKey) => {
@@ -168,6 +199,7 @@ export default function PriceComparePage() {
   const totalDecreased  = rows.filter(r => r.priceDiff !== null && r.priceDiff < 0).length;
   const totalSame       = rows.filter(r => r.priceDiff === 0).length;
   const totalNotFound   = rows.filter(r => !r.matched).length;
+  const totalAmbiguous  = rows.filter(r => r.multipleMatches && !r.resolvedByUser).length;
 
   const visible = rows
     .filter(r => {
@@ -175,6 +207,7 @@ export default function PriceComparePage() {
       if (filter === "decreased") return r.priceDiff !== null && r.priceDiff < 0;
       if (filter === "same")      return r.priceDiff === 0;
       if (filter === "notfound")  return !r.matched;
+      if (filter === "ambiguous") return r.multipleMatches && !r.resolvedByUser;
       return true;
     })
     .filter(r => {
@@ -184,11 +217,11 @@ export default function PriceComparePage() {
     })
     .sort((a, b) => {
       let av: any, bv: any;
-      if (sortKey === "name")          { av = a.name;          bv = b.name; }
+      if (sortKey === "name")               { av = a.name;          bv = b.name; }
       else if (sortKey === "registerPrice") { av = a.registerPrice; bv = b.registerPrice; }
       else if (sortKey === "michiganPrice") { av = a.michiganPrice ?? -1; bv = b.michiganPrice ?? -1; }
-      else if (sortKey === "priceDiff") { av = a.priceDiff ?? 999; bv = b.priceDiff ?? 999; }
-      else { av = a.newPrice; bv = b.newPrice; }
+      else if (sortKey === "priceDiff")     { av = a.priceDiff ?? 999; bv = b.priceDiff ?? 999; }
+      else                                  { av = a.newPrice; bv = b.newPrice; }
       if (av < bv) return sortDir === "asc" ? -1 : 1;
       if (av > bv) return sortDir === "asc" ? 1  : -1;
       return 0;
@@ -277,7 +310,7 @@ export default function PriceComparePage() {
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 space-y-5">
 
-        {/* Upload zone (always visible, smaller when results loaded) */}
+        {/* Upload zone */}
         <div
           onDragOver={e => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
@@ -315,7 +348,7 @@ export default function PriceComparePage() {
 
         {/* Summary strip */}
         {rows.length > 0 && !loading && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <Card className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => setFilter("all")}>
               <CardContent className="py-3 px-4 flex items-center gap-2">
                 <CheckCircle className="h-4 w-4 text-primary" />
@@ -352,6 +385,29 @@ export default function PriceComparePage() {
                 </div>
               </CardContent>
             </Card>
+            <Card
+              className={`cursor-pointer transition-colors ${totalAmbiguous > 0 ? "hover:border-orange-400 border-orange-200 bg-orange-50/40" : "hover:border-muted"}`}
+              onClick={() => setFilter("ambiguous")}
+            >
+              <CardContent className="py-3 px-4 flex items-center gap-2">
+                <HelpCircle className={`h-4 w-4 ${totalAmbiguous > 0 ? "text-orange-500" : "text-muted-foreground"}`} />
+                <div>
+                  <p className={`text-xl font-bold ${totalAmbiguous > 0 ? "text-orange-600" : "text-muted-foreground"}`}>{totalAmbiguous}</p>
+                  <p className="text-xs text-muted-foreground">Need review</p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* Ambiguous banner */}
+        {totalAmbiguous > 0 && !loading && (
+          <div className="flex items-start gap-3 bg-orange-50 border border-orange-200 rounded-lg px-4 py-3 text-sm text-orange-800">
+            <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-orange-500" />
+            <span>
+              <strong>{totalAmbiguous} product{totalAmbiguous > 1 ? "s share" : " shares"} a UPC with multiple Michigan records.</strong>{" "}
+              Click the orange <strong>?</strong> badge on any row to pick the correct match.
+            </span>
           </div>
         )}
 
@@ -364,14 +420,19 @@ export default function PriceComparePage() {
               ["decreased", `↓ Down (${totalDecreased})`],
               ["same",      `— Same (${totalSame})`],
               ["notfound",  `? Not found (${totalNotFound})`],
+              ["ambiguous", `⚠ Review (${totalAmbiguous})`],
             ] as [Filter, string][]).map(([f, label]) => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}
                 className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                   filter === f
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    ? f === "ambiguous"
+                      ? "bg-orange-500 text-white"
+                      : "bg-primary text-primary-foreground"
+                    : f === "ambiguous" && totalAmbiguous > 0
+                      ? "bg-orange-100 text-orange-700 hover:bg-orange-200"
+                      : "bg-muted text-muted-foreground hover:bg-muted/80"
                 }`}
               >
                 {label}
@@ -413,21 +474,46 @@ export default function PriceComparePage() {
                     </tr>
                   )}
                   {visibleWithIdx.map(({ row, origIdx }) => {
-                    const rowBg = !row.matched
-                      ? "bg-amber-50/40"
-                      : row.priceDiff && row.priceDiff > 0
-                        ? "bg-red-50/30"
-                        : row.priceDiff && row.priceDiff < 0
-                          ? "bg-green-50/30"
-                          : "";
+                    const needsReview = row.multipleMatches && !row.resolvedByUser;
+                    const rowBg = needsReview
+                      ? "bg-orange-50/60"
+                      : !row.matched
+                        ? "bg-amber-50/40"
+                        : row.priceDiff && row.priceDiff > 0
+                          ? "bg-red-50/30"
+                          : row.priceDiff && row.priceDiff < 0
+                            ? "bg-green-50/30"
+                            : "";
                     return (
                       <tr key={origIdx} className={`hover:bg-muted/20 transition-colors ${rowBg}`}>
                         {/* Name */}
                         <td className="px-3 py-2.5">
-                          <p className="font-medium text-foreground leading-tight">{row.name}</p>
-                          {row.michiganName && row.michiganName !== row.name && (
-                            <p className="text-xs text-muted-foreground mt-0.5">MI: {row.michiganName}</p>
-                          )}
+                          <div className="flex items-start gap-2">
+                            {needsReview && (
+                              <button
+                                title="Multiple Michigan records share this UPC — click to pick the correct one"
+                                onClick={() => setDisambigRow({ origIdx, row })}
+                                className="flex-shrink-0 mt-0.5 bg-orange-100 hover:bg-orange-200 text-orange-600 rounded-full h-5 w-5 flex items-center justify-center transition-colors"
+                              >
+                                <HelpCircle className="h-3 w-3" />
+                              </button>
+                            )}
+                            {row.resolvedByUser && (
+                              <button
+                                title={`Resolved — click to change the match (${row.allMatches?.length ?? 0} options)`}
+                                onClick={() => setDisambigRow({ origIdx, row })}
+                                className="flex-shrink-0 mt-0.5 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded-full h-5 w-5 flex items-center justify-center transition-colors"
+                              >
+                                <CheckCircle className="h-3 w-3" />
+                              </button>
+                            )}
+                            <div className="min-w-0">
+                              <p className="font-medium text-foreground leading-tight">{row.name}</p>
+                              {row.michiganName && row.michiganName !== row.name && (
+                                <p className="text-xs text-muted-foreground mt-0.5">MI: {row.michiganName}</p>
+                              )}
+                            </div>
+                          </div>
                         </td>
                         {/* UPC */}
                         <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.upc}</td>
@@ -443,7 +529,10 @@ export default function PriceComparePage() {
                         </td>
                         {/* Diff badge */}
                         <td className="px-3 py-2.5">
-                          <DiffBadge diff={row.priceDiff} />
+                          {needsReview
+                            ? <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100 cursor-pointer" onClick={() => setDisambigRow({ origIdx, row })}>Pick match</Badge>
+                            : <DiffBadge diff={row.priceDiff} />
+                          }
                         </td>
                         {/* New price — editable */}
                         <td className="px-3 py-2.5">
@@ -517,6 +606,83 @@ export default function PriceComparePage() {
           </div>
         )}
       </main>
+
+      {/* ── Disambiguation dialog ──────────────────────────────────────── */}
+      <Dialog open={!!disambigRow} onOpenChange={open => { if (!open) setDisambigRow(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <HelpCircle className="h-5 w-5 text-orange-500" />
+              Multiple Michigan records for this UPC
+            </DialogTitle>
+            <DialogDescription>
+              UPC <span className="font-mono">{disambigRow?.row.upc}</span> matches{" "}
+              {disambigRow?.row.allMatches?.length ?? 0} products in the Michigan price book.
+              Pick the one that matches <strong>{disambigRow?.row.name}</strong> on your register.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+            {disambigRow?.row.allMatches?.map((match, i) => {
+              const miPrice = match.shelfPrice ?? null;
+              const diff = miPrice !== null
+                ? Math.round((miPrice - (disambigRow.row.registerPrice)) * 100) / 100
+                : null;
+              const isCurrentMatch = disambigRow.row.resolvedByUser
+                && disambigRow.row.michiganName === `${match.brandName} ${match.bottleSize}`;
+              return (
+                <button
+                  key={i}
+                  onClick={() => applyMatch(disambigRow.origIdx, match)}
+                  className={`w-full text-left rounded-lg border px-4 py-3 transition-colors
+                    ${isCurrentMatch
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/50 hover:bg-muted/40"
+                    }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-foreground leading-tight">
+                        {match.brandName}
+                      </p>
+                      <p className="text-sm text-muted-foreground mt-0.5">
+                        {match.bottleSize}
+                        {match.liquorCode ? <span className="ml-2 font-mono text-xs">#{match.liquorCode}</span> : null}
+                      </p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      {miPrice !== null ? (
+                        <>
+                          <p className="font-bold text-foreground">${miPrice.toFixed(2)}</p>
+                          {diff !== null && diff !== 0 && (
+                            <p className={`text-xs font-medium ${diff > 0 ? "text-red-600" : "text-green-600"}`}>
+                              {diff > 0 ? "+" : ""}{diff.toFixed(2)} vs yours
+                            </p>
+                          )}
+                          {diff === 0 && (
+                            <p className="text-xs text-muted-foreground">Same as yours</p>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No price</p>
+                      )}
+                    </div>
+                  </div>
+                  {isCurrentMatch && (
+                    <p className="text-xs text-primary mt-1.5 font-medium">✓ Currently selected</p>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="pt-2 border-t border-border">
+            <Button variant="outline" className="w-full" onClick={() => setDisambigRow(null)}>
+              Cancel — keep current match
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
