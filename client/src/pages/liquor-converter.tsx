@@ -4,7 +4,7 @@ import { SummaryStats } from "@/components/summary-stats";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Download, HelpCircle, Book, Scan, RefreshCw, CheckCircle, AlertCircle } from "lucide-react";
+import { FileText, Download, HelpCircle, Book, Scan, RefreshCw, CheckCircle, AlertCircle, TrendingUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 
@@ -211,6 +211,20 @@ export default function LiquorConverter() {
               </div>
             </div>
             <div className="hidden sm:flex items-center space-x-4">
+              <a
+                href="/price-compare"
+                className="bg-secondary text-secondary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-secondary/90 transition-colors"
+              >
+                <TrendingUp className="h-4 w-4 mr-2 inline" />
+                Price Compare
+              </a>
+              <a
+                href="/scanner"
+                className="bg-secondary text-secondary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-secondary/90 transition-colors"
+              >
+                <Scan className="h-4 w-4 mr-2 inline" />
+                Scanner
+              </a>
               <Badge variant={isComplete ? "default" : "secondary"}>
                 {isComplete ? "Ready to Scan" : "Loading Data"}
               </Badge>

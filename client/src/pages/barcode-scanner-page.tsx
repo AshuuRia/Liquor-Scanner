@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { FileText, Scan, AlertCircle, AlertTriangle } from "lucide-react";
+import { FileText, Scan, AlertCircle, AlertTriangle, TrendingUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { LiquorRecord, Session } from "@shared/schema";
 
@@ -318,6 +318,13 @@ export default function BarcodeScannerPage() {
                 }}
                 currentSessionId={sessionId}
               />
+              <a
+                href="/price-compare"
+                className="bg-secondary text-secondary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-secondary/90 transition-colors"
+              >
+                <TrendingUp className="h-4 w-4 mr-2 inline" />
+                Price Compare
+              </a>
               <a 
                 href="/" 
                 className="bg-secondary text-secondary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-secondary/90 transition-colors"

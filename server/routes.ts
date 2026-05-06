@@ -1270,6 +1270,107 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ── Price comparison: parse register CSV and match against Michigan DB ──
+  app.post("/api/compare-prices", async (req, res) => {
+    try {
+      const { csvText } = req.body;
+      if (!csvText) return res.status(400).json({ success: false, error: "No CSV text provided" });
+
+      // Simple but robust CSV parser that handles quoted fields
+      function parseCsvLine(line: string): string[] {
+        const fields: string[] = [];
+        let cur = '';
+        let inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') {
+            if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+            else inQ = !inQ;
+          } else if (ch === ',' && !inQ) {
+            fields.push(cur); cur = '';
+          } else {
+            cur += ch;
+          }
+        }
+        fields.push(cur);
+        return fields;
+      }
+
+      function normalizeUpc(upc: string | null): string {
+        if (!upc) return '';
+        return upc.replace(/^0+/, '') || '0';
+      }
+
+      const lines = csvText.split(/\r?\n/).filter((l: string) => l.trim());
+      if (lines.length < 2) return res.status(400).json({ success: false, error: "CSV appears empty" });
+
+      // Parse header to find column positions dynamically
+      const header = parseCsvLine(lines[0]).map((h: string) => h.toLowerCase().trim());
+      const col = (name: string) => header.indexOf(name);
+      const upcIdx    = col('upc');
+      const nameIdx   = col('name');
+      const priceIdx  = col('price');
+      const centsIdx  = col('cents');
+      const deptIdx   = col('department');
+      const sizeIdx   = col('size');
+
+      if (upcIdx === -1 || nameIdx === -1) {
+        return res.status(400).json({ success: false, error: "CSV missing required Upc or Name columns. Make sure you're uploading a P-touch CSV export." });
+      }
+
+      const rows = [];
+      for (let i = 1; i < lines.length; i++) {
+        const fields = parseCsvLine(lines[i]);
+        if (fields.length < 2) continue;
+
+        const rawUpc  = (fields[upcIdx]  || '').trim();
+        const rawName = (fields[nameIdx] || '').trim();
+        const rawPrice = priceIdx >= 0 ? (fields[priceIdx] || '').trim() : '';
+        const rawCents = centsIdx >= 0 ? (fields[centsIdx] || '').trim() : '';
+        const dept     = deptIdx >= 0  ? (fields[deptIdx]  || '').trim() : 'Liquor';
+        const sizeCode = sizeIdx >= 0  ? (fields[sizeIdx]  || '').trim() : '';
+
+        if (!rawUpc && !rawName) continue;
+
+        // Parse register price
+        let registerPrice = 0;
+        if (rawCents) {
+          registerPrice = parseInt(rawCents, 10) / 100;
+        } else if (rawPrice) {
+          registerPrice = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
+        }
+
+        // Look up in Michigan DB
+        const matches = await storage.findAllLiquorByBarcode(rawUpc);
+        const match   = matches[0] || null;
+        const michiganPrice = match?.shelfPrice ?? null;
+        const priceDiff = michiganPrice !== null ? Math.round((michiganPrice - registerPrice) * 100) / 100 : null;
+
+        rows.push({
+          upc:               rawUpc,
+          name:              rawName,
+          registerPrice,
+          department:        dept,
+          liquorCode:        sizeCode,
+          matched:           !!match,
+          multipleMatches:   matches.length > 1,
+          allMatches:        matches.length > 1 ? matches : undefined,
+          michiganPrice,
+          michiganName:      match ? `${match.brandName} ${match.bottleSize}` : null,
+          michiganBottleSize:match?.bottleSize ?? null,
+          michiganLiquorCode:match?.liquorCode ?? null,
+          michiganRecord:    match ?? null,
+          priceDiff,
+        });
+      }
+
+      res.json({ success: true, rows, totalRows: rows.length });
+    } catch (err) {
+      console.error("compare-prices error:", err);
+      res.status(500).json({ success: false, error: "Failed to compare prices" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

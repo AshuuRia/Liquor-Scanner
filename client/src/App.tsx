@@ -6,12 +6,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import LiquorConverter from "@/pages/liquor-converter";
 import BarcodeScannerPage from "@/pages/barcode-scanner-page";
+import PriceComparePage from "@/pages/price-compare-page";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={LiquorConverter} />
       <Route path="/scanner" component={BarcodeScannerPage} />
+      <Route path="/price-compare" component={PriceComparePage} />
       <Route component={NotFound} />
     </Switch>
   );
